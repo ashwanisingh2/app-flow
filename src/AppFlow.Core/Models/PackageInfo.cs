@@ -3,7 +3,7 @@ namespace AppFlow.Core.Models;
 using AppFlow.Core.Enums;
 
 /// <summary>
-/// Core package representation with essential metadata.
+/// Lightweight package representation used by search and installed-package lists.
 /// </summary>
 public class PackageInfo
 {
@@ -14,12 +14,18 @@ public class PackageInfo
     public string? LatestVersion { get; set; }
     public bool IsInstalled { get; set; }
     public bool HasUpdate => IsInstalled
-                             && InstalledVersion != null
-                             && LatestVersion != null
-                             && InstalledVersion != LatestVersion;
+                             && !string.IsNullOrWhiteSpace(InstalledVersion)
+                             && !string.IsNullOrWhiteSpace(LatestVersion)
+                             && !string.Equals(InstalledVersion, LatestVersion, StringComparison.OrdinalIgnoreCase);
     public bool IsSigned { get; set; }
     public TrustLevel TrustLevel { get; set; }
+
+    /// <summary>The source represented by Id and used when opening details.</summary>
+    public string SourceId { get; set; } = string.Empty;
+
     public List<string> AvailableSources { get; set; } = new();
+    public Dictionary<string, string> SourcePackageIds { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
     public List<ActionType> SupportedActions { get; set; } = new();
     public string? Category { get; set; }
     public List<string> Tags { get; set; } = new();

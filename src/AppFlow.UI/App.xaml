@@ -30,6 +30,7 @@
             <Thickness x:Key="AppFlowCardMargin">4</Thickness>
 
             <converters:BoolNegationConverter x:Key="BoolNegationConverter" />
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
 
         </ResourceDictionary>
     </Application.Resources>

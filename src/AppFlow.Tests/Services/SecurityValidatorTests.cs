@@ -1,37 +1,99 @@
 namespace AppFlow.Tests.Services;
 
 using AppFlow.Core.Enums;
+using AppFlow.Core.Interfaces;
 using AppFlow.Core.Models;
 using AppFlow.Core.Services;
 using FluentAssertions;
-using System.Threading.Tasks;
-using Xunit;
+using Moq;
 
 public class SecurityValidatorTests
 {
-    private readonly SecurityValidator _validator = new();
+    private readonly Mock<IInstallerIntegrityVerifier> _integrity = new();
 
     [Fact]
-    public async Task ValidateAsync_LowTrustScore_ReturnsWarning()
+    public async Task ValidateAsync_UnsignedPackage_AddsWarningAndRequiresConfirmationWithoutHash()
     {
-        var action = new PackageAction { PackageId = "test" };
-        var source = new SourceQueryResult { SourceTrustScore = 2, ExpectedHash = "hash" };
+        var validator = new SecurityValidator(_integrity.Object);
+        var source = new SourceQueryResult
+        {
+            PackageName = "Test",
+            SourceId = "winget",
+            SourceTrustScore = 5,
+            IsSigned = false
+        };
 
-        var result = await _validator.ValidateAsync(action, source);
+        var result = await validator.ValidateAsync(new PackageAction(), source);
 
-        result.Warnings.Should().Contain(w => w.Contains("low trust rating"));
-        result.RiskLevel.Should().Be(RiskLevel.High);
+        result.Warnings.Should().ContainSingle(message => message.Contains("Authenticode"));
+        result.RiskLevel.Should().Be(RiskLevel.Medium);
+        result.RequiresUserConfirmation.Should().BeTrue();
     }
 
     [Fact]
-    public async Task ValidateAsync_HighTrustScore_NoWarning()
+    public async Task ValidateAsync_HashMismatch_BlocksInstall()
     {
-        var action = new PackageAction { PackageId = "test" };
-        var source = new SourceQueryResult { SourceTrustScore = 5, IsSigned = true };
+        _integrity.Setup(x => x.VerifySha256Async(
+                "https://example.test/app.exe", "ABC", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var validator = new SecurityValidator(_integrity.Object);
+        var source = new SourceQueryResult
+        {
+            PackageName = "Test",
+            SourceId = "winget",
+            SourceTrustScore = 5,
+            IsSigned = true,
+            DownloadUrl = "https://example.test/app.exe",
+            ExpectedHash = "ABC"
+        };
 
-        var result = await _validator.ValidateAsync(action, source);
+        var result = await validator.ValidateAsync(new PackageAction(), source);
 
-        result.Warnings.Should().BeEmpty();
-        result.RiskLevel.Should().Be(RiskLevel.Low);
+        result.BlockInstall.Should().BeTrue();
+        result.HashChecked.Should().BeTrue();
+        result.HashValid.Should().BeFalse();
+        result.Errors.Should().Contain(message => message.Contains("checksum mismatch"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_HighRiskSource_RequiresConfirmation()
+    {
+        var validator = new SecurityValidator(_integrity.Object);
+        var source = new SourceQueryResult
+        {
+            PackageName = "Test",
+            SourceId = "github",
+            SourceTrustScore = 2,
+            IsSigned = true
+        };
+
+        var result = await validator.ValidateAsync(new PackageAction(), source);
+
+        result.RiskLevel.Should().Be(RiskLevel.High);
+        result.RequiresUserConfirmation.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ValidHashAndTrustedSource_AllowsInstall()
+    {
+        _integrity.Setup(x => x.VerifySha256Async(
+                "https://example.test/app.exe", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var validator = new SecurityValidator(_integrity.Object);
+        var source = new SourceQueryResult
+        {
+            PackageName = "Test",
+            SourceId = "winget",
+            SourceTrustScore = 5,
+            IsSigned = true,
+            DownloadUrl = "https://example.test/app.exe",
+            ExpectedHash = new string('A', 64)
+        };
+
+        var result = await validator.ValidateAsync(new PackageAction(), source);
+
+        result.IsValid.Should().BeTrue();
+        result.HashValid.Should().BeTrue();
+        result.RequiresUserConfirmation.Should().BeFalse();
     }
 }

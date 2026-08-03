@@ -1,6 +1,6 @@
 namespace AppFlow.Database.Repositories;
 
-public class ActionHistoryEntry
+public sealed class ActionHistoryEntry
 {
     public int Id { get; set; }
     public string PackageId { get; set; } = string.Empty;
@@ -13,4 +13,6 @@ public class ActionHistoryEntry
     public string? InstallerArgs { get; set; }
     public string? LogOutput { get; set; }
     public DateTime Timestamp { get; set; }
+    public string DisplayTimestamp => Timestamp.ToLocalTime().ToString("g");
+    public string StatusText => Success ? "Succeeded" : "Failed";
 }

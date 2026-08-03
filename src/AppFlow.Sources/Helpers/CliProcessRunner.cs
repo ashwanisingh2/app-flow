@@ -3,18 +3,19 @@ namespace AppFlow.Sources.Helpers;
 using System.Diagnostics;
 using System.Text;
 
-public class ProcessResult
+public sealed class ProcessResult
 {
-    public int ExitCode { get; set; }
-    public string StandardOutput { get; set; } = string.Empty;
-    public string StandardError { get; set; } = string.Empty;
+    public int ExitCode { get; init; }
+    public string StandardOutput { get; init; } = string.Empty;
+    public string StandardError { get; init; } = string.Empty;
     public bool Success => ExitCode == 0;
 }
 
 public static class CliProcessRunner
 {
     public static async Task<ProcessResult> RunAsync(
-        string executable, string arguments,
+        string executable,
+        IEnumerable<string> arguments,
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         int timeoutMs = 30000)
@@ -22,7 +23,6 @@ public static class CliProcessRunner
         var psi = new ProcessStartInfo
         {
             FileName = executable,
-            Arguments = arguments,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -30,6 +30,8 @@ public static class CliProcessRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        foreach (var argument in arguments)
+            psi.ArgumentList.Add(argument);
 
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();
@@ -37,40 +39,51 @@ public static class CliProcessRunner
 
         process.OutputDataReceived += (_, e) =>
         {
-            if (e.Data is not null)
-            {
-                stdout.AppendLine(e.Data);
-                progress?.Report(e.Data);
-            }
+            if (e.Data is null) return;
+            lock (stdout) stdout.AppendLine(e.Data);
+            progress?.Report(e.Data);
         };
         process.ErrorDataReceived += (_, e) =>
         {
-            if (e.Data is not null)
-                stderr.AppendLine(e.Data);
+            if (e.Data is null) return;
+            lock (stderr) stderr.AppendLine(e.Data);
+            progress?.Report($"ERROR: {e.Data}");
         };
 
-        process.Start();
+        if (!process.Start())
+            throw new InvalidOperationException($"Could not start {executable}.");
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(timeoutMs);
-
+        using var timeout = new CancellationTokenSource(timeoutMs);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {
-            await process.WaitForExitAsync(cts.Token);
+            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            process.WaitForExit(); // Flush asynchronous output events.
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            TryKill(process);
+            throw new TimeoutException($"{executable} did not finish within {timeoutMs} ms.");
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
+            TryKill(process);
             throw;
         }
+
+        string output;
+        string error;
+        lock (stdout) output = stdout.ToString();
+        lock (stderr) error = stderr.ToString();
 
         return new ProcessResult
         {
             ExitCode = process.ExitCode,
-            StandardOutput = stdout.ToString(),
-            StandardError = stderr.ToString()
+            StandardOutput = output,
+            StandardError = error
         };
     }
 
@@ -81,16 +94,52 @@ public static class CliProcessRunner
             var psi = new ProcessStartInfo
             {
                 FileName = executable,
-                Arguments = "--version",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("--version");
+
             using var process = Process.Start(psi);
-            process?.WaitForExit(3000);
-            return process is not null && process.ExitCode == 0;
+            if (process is null) return false;
+            if (!process.WaitForExit(3000))
+            {
+                TryKill(process);
+                return false;
+            }
+            return process.ExitCode == 0;
         }
-        catch { return false; }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    public static string FormatArguments(IEnumerable<string> arguments) =>
+        string.Join(" ", arguments.Select(QuoteForDisplay));
+
+    private static string QuoteForDisplay(string value) =>
+        value.Any(char.IsWhiteSpace) || value.Contains('"')
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
     }
 }

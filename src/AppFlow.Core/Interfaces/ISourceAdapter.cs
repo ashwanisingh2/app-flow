@@ -10,7 +10,7 @@ public interface ISourceAdapter
     bool IsAvailable { get; }
 
     Task<List<PackageInfo>> SearchAsync(string query, CancellationToken ct = default);
-    Task<PackageDetail> GetDetailsAsync(string packageId, CancellationToken ct = default);
+    Task<PackageDetail?> GetDetailsAsync(string packageId, CancellationToken ct = default);
     Task<ActionResult> InstallAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default);
     Task<ActionResult> UpdateAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default);
     Task<ActionResult> UninstallAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default);

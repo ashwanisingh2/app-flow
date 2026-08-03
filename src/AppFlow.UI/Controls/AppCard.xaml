@@ -23,11 +23,11 @@
             </StackPanel>
             
             <StackPanel Orientation="Horizontal" Margin="0,8,0,0" Spacing="4">
-                <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{StaticResource AppFlowSuccessBrush}" Visibility="{x:Bind IsInstalled, Mode=OneWay}"/>
-                <TextBlock Text="Installed" FontSize="11" Foreground="{StaticResource AppFlowSuccessBrush}" Visibility="{x:Bind IsInstalled, Mode=OneWay}"/>
+                <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{StaticResource AppFlowSuccessBrush}" Visibility="{x:Bind IsInstalled, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                <TextBlock Text="Installed" FontSize="11" Foreground="{StaticResource AppFlowSuccessBrush}" Visibility="{x:Bind IsInstalled, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 
-                <FontIcon Glyph="&#xE777;" FontSize="12" Foreground="{StaticResource AppFlowWarningBrush}" Visibility="{x:Bind HasUpdate, Mode=OneWay}" Margin="8,0,0,0"/>
-                <TextBlock Text="Update available" FontSize="11" Foreground="{StaticResource AppFlowWarningBrush}" Visibility="{x:Bind HasUpdate, Mode=OneWay}"/>
+                <FontIcon Glyph="&#xE777;" FontSize="12" Foreground="{StaticResource AppFlowWarningBrush}" Visibility="{x:Bind HasUpdate, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" Margin="8,0,0,0"/>
+                <TextBlock Text="Update available" FontSize="11" Foreground="{StaticResource AppFlowWarningBrush}" Visibility="{x:Bind HasUpdate, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
             </StackPanel>
         </StackPanel>
     </Border>

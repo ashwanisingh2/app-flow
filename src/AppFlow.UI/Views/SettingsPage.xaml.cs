@@ -1,8 +1,9 @@
 namespace AppFlow.UI.Views;
 
-using Microsoft.UI.Xaml.Controls;
 using AppFlow.UI.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 
 public sealed partial class SettingsPage : Page
 {
@@ -10,8 +11,11 @@ public sealed partial class SettingsPage : Page
 
     public SettingsPage()
     {
-        this.InitializeComponent();
+        InitializeComponent();
         ViewModel = App.Current.Services.GetRequiredService<SettingsViewModel>();
-        this.DataContext = ViewModel;
+        DataContext = ViewModel;
     }
+
+    private void Page_Loaded(object sender, RoutedEventArgs e) =>
+        ViewModel.LoadSettingsCommand.Execute(null);
 }

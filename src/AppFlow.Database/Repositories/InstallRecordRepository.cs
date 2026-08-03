@@ -1,67 +1,89 @@
 namespace AppFlow.Database.Repositories;
 
+using AppFlow.Core.Interfaces;
 using AppFlow.Core.Models;
 using Dapper;
 
-public class InstallRecordRepository
+public sealed class InstallRecordRepository : IInstallRecordStore
 {
+    private const string SelectColumns = """
+        PackageId, InstalledFrom, InstalledVersion, LockedSource, InstalledAt,
+        UserOverridden AS UserOverriddenSource
+        """;
+
     private readonly AppFlowDb _db;
 
-    public InstallRecordRepository(AppFlowDb db)
-    {
-        _db = db;
-    }
+    public InstallRecordRepository(AppFlowDb db) => _db = db;
 
-    public async Task<InstallRecord?> GetByPackageIdAsync(string packageId)
+    public async Task<InstallRecord?> GetByPackageIdAsync(
+        string packageId,
+        CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
-        return await conn.QueryFirstOrDefaultAsync<InstallRecord>(
-            "SELECT * FROM InstallRecords WHERE PackageId = @PackageId", 
-            new { PackageId = packageId });
+        return await conn.QueryFirstOrDefaultAsync<InstallRecord>(new CommandDefinition(
+            $"SELECT {SelectColumns} FROM InstallRecords WHERE PackageId = @PackageId",
+            new { PackageId = packageId },
+            cancellationToken: ct));
     }
 
-    public async Task SaveAsync(InstallRecord record)
+    public async Task SaveAsync(InstallRecord record, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(@"
-            INSERT OR REPLACE INTO InstallRecords 
-            (PackageId, InstalledFrom, InstalledVersion, LockedSource, InstalledAt, UserOverridden)
-            VALUES (@PackageId, @InstalledFrom, @InstalledVersion, @LockedSource, @InstalledAt, @UserOverriddenSource)",
-            record);
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO InstallRecords
+                (PackageId, InstalledFrom, InstalledVersion, LockedSource, InstalledAt, UserOverridden)
+            VALUES
+                (@PackageId, @InstalledFrom, @InstalledVersion, @LockedSource, @InstalledAt, @UserOverriddenSource)
+            ON CONFLICT(PackageId) DO UPDATE SET
+                InstalledFrom = excluded.InstalledFrom,
+                InstalledVersion = excluded.InstalledVersion,
+                LockedSource = excluded.LockedSource,
+                InstalledAt = excluded.InstalledAt,
+                UserOverridden = excluded.UserOverridden
+            """,
+            new
+            {
+                record.PackageId,
+                record.InstalledFrom,
+                record.InstalledVersion,
+                record.LockedSource,
+                InstalledAt = record.InstalledAt.ToUniversalTime().ToString("O"),
+                record.UserOverriddenSource
+            },
+            cancellationToken: ct));
     }
 
-    public async Task DeleteAsync(string packageId)
+    public async Task DeleteAsync(string packageId, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync("DELETE FROM InstallRecords WHERE PackageId = @PackageId", new { PackageId = packageId });
+        await conn.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM InstallRecords WHERE PackageId = @PackageId",
+            new { PackageId = packageId },
+            cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<InstallRecord>> GetAllAsync()
+    public async Task<IReadOnlyList<InstallRecord>> GetAllAsync(CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
-        var results = await conn.QueryAsync<InstallRecord>("SELECT * FROM InstallRecords");
+        var results = await conn.QueryAsync<InstallRecord>(new CommandDefinition(
+            $"SELECT {SelectColumns} FROM InstallRecords ORDER BY InstalledAt DESC",
+            cancellationToken: ct));
         return results.ToList();
     }
 
-    public async Task<bool> ExistsAsync(string packageId)
-    {
-        using var conn = _db.CreateConnection();
-        var count = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM InstallRecords WHERE PackageId = @PackageId", 
-            new { PackageId = packageId });
-        return count > 0;
-    }
+    public async Task<bool> ExistsAsync(string packageId, CancellationToken ct = default) =>
+        await GetByPackageIdAsync(packageId, ct) is not null;
 
-    public async Task<string?> GetLockedSourceAsync(string packageId)
-    {
-        var record = await GetByPackageIdAsync(packageId);
-        return record?.LockedSource;
-    }
+    public async Task<string?> GetLockedSourceAsync(string packageId, CancellationToken ct = default) =>
+        (await GetByPackageIdAsync(packageId, ct))?.LockedSource;
 
-    public async Task<bool> IsInstalledFromDifferentSourceAsync(string packageId, string sourceId)
+    public async Task<bool> IsInstalledFromDifferentSourceAsync(
+        string packageId,
+        string sourceId,
+        CancellationToken ct = default)
     {
-        var record = await GetByPackageIdAsync(packageId);
-        if (record == null) return false;
-        return record.LockedSource != sourceId;
+        var record = await GetByPackageIdAsync(packageId, ct);
+        return record is not null
+               && !string.Equals(record.LockedSource, sourceId, StringComparison.OrdinalIgnoreCase);
     }
 }

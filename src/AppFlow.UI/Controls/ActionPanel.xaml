@@ -14,12 +14,12 @@
         
         <Button x:Name="UpdateBtn" Content="Update" HorizontalAlignment="Stretch" 
                 Click="UpdateBtn_Click" IsEnabled="{x:Bind IsExecuting, Mode=OneWay, Converter={StaticResource BoolNegationConverter}}"
-                Visibility="{x:Bind HasUpdate, Mode=OneWay}"/>
+                Visibility="{x:Bind HasUpdate, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 
         <Button x:Name="UninstallBtn" Content="Uninstall" HorizontalAlignment="Stretch" 
                 Click="UninstallBtn_Click" IsEnabled="{x:Bind IsExecuting, Mode=OneWay, Converter={StaticResource BoolNegationConverter}}"
-                Visibility="{x:Bind IsInstalled, Mode=OneWay}"/>
+                Visibility="{x:Bind IsInstalled, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 
-        <ProgressBar IsIndeterminate="True" Visibility="{x:Bind IsExecuting, Mode=OneWay}" Margin="0,12,0,0"/>
+        <ProgressBar IsIndeterminate="True" Visibility="{x:Bind IsExecuting, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" Margin="0,12,0,0"/>
     </StackPanel>
 </UserControl>

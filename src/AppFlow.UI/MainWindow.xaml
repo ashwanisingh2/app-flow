@@ -6,7 +6,7 @@
     xmlns:views="using:AppFlow.UI.Views"
     Title="AppFlow">
 
-    <Grid>
+    <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>

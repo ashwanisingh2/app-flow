@@ -6,199 +6,291 @@ using AppFlow.Core.Models;
 using AppFlow.Sources.Helpers;
 using System.Text.RegularExpressions;
 
-public class WinGetAdapter : ISourceAdapter
+public sealed class WinGetAdapter : ISourceAdapter
 {
+    private readonly Lazy<bool> _availability =
+        new(() => CliProcessRunner.IsToolAvailable("winget"), LazyThreadSafetyMode.ExecutionAndPublication);
+
     public string SourceId => "winget";
     public string DisplayName => "Windows Package Manager (WinGet)";
     public int TrustScore => 5;
-    public bool IsAvailable => CliProcessRunner.IsToolAvailable("winget");
+    public bool IsAvailable => _availability.Value;
 
     public async Task<List<PackageInfo>> SearchAsync(string query, CancellationToken ct = default)
     {
-        var result = await CliProcessRunner.RunAsync("winget", $"search \"{query}\" --accept-source-agreements --disable-interactivity", null, ct);
+        var result = await CliProcessRunner.RunAsync(
+            "winget",
+            new[] { "search", query, "--source", "winget", "--accept-source-agreements", "--disable-interactivity" },
+            ct: ct).ConfigureAwait(false);
         if (!result.Success) return new List<PackageInfo>();
 
         return ParseTabularOutput(result.StandardOutput)
             .Select(row => new PackageInfo
             {
-                Id = row.ContainsKey("Id") ? row["Id"] : row.Values.ElementAtOrDefault(1) ?? "",
-                Name = row.ContainsKey("Name") ? row["Name"] : row.Values.FirstOrDefault() ?? "",
-                LatestVersion = row.ContainsKey("Version") ? row["Version"] : "",
+                Id = Value(row, "Id", 1),
+                Name = Value(row, "Name", 0),
+                LatestVersion = NullIfEmpty(Value(row, "Version", 2)),
+                SourceId = SourceId,
                 AvailableSources = new List<string> { SourceId },
-                TrustLevel = TrustLevel.Verified
+                SourcePackageIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [SourceId] = Value(row, "Id", 1)
+                },
+                TrustLevel = TrustLevel.Verified,
+                SupportedActions = new List<ActionType> { ActionType.Install }
             })
-            .Where(p => !string.IsNullOrEmpty(p.Id))
+            .Where(p => !string.IsNullOrWhiteSpace(p.Id))
             .ToList();
     }
 
-    public async Task<PackageDetail> GetDetailsAsync(string packageId, CancellationToken ct = default)
+    public async Task<PackageDetail?> GetDetailsAsync(string packageId, CancellationToken ct = default)
     {
-        var result = await CliProcessRunner.RunAsync("winget", $"show --id {packageId} --accept-source-agreements --disable-interactivity", null, ct);
-        var detail = new PackageDetail { Id = packageId, SourceId = SourceId, SourceTrustScore = TrustScore, IsOfficialSource = true };
-
-        if (!result.Success) return detail;
-
-        var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var line in lines)
-        {
-            var match = Regex.Match(line, @"^([^:]+):\s*(.+)$");
-            if (match.Success)
+        var result = await CliProcessRunner.RunAsync(
+            "winget",
+            new[]
             {
-                var key = match.Groups[1].Value.Trim();
-                var value = match.Groups[2].Value.Trim();
-                switch (key)
-                {
-                    case "Version": detail.LatestVersion = value; break;
-                    case "Publisher": detail.Publisher = value; break;
-                    case "Description": detail.Description = value; break;
-                    case "Homepage": detail.Homepage = value; break;
-                    case "License": detail.License = value; break;
-                    case "Installer SHA256": detail.ExpectedHash = value; break;
-                    case "Installer Url": detail.DownloadUrl = value; break;
-                }
+                "show", "--id", packageId, "--exact", "--source", "winget",
+                "--accept-source-agreements", "--disable-interactivity"
+            },
+            ct: ct).ConfigureAwait(false);
+        if (!result.Success) return null;
+
+        var detail = new PackageDetail
+        {
+            Id = packageId,
+            Name = packageId,
+            SourceId = SourceId,
+            SourceTrustScore = TrustScore,
+            IsOfficialSource = true,
+            TrustLevel = TrustLevel.Verified,
+            SupportsSilent = true,
+            AvailableSources = new List<string> { SourceId }
+        };
+
+        foreach (var rawLine in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var found = Regex.Match(line, @"^Found\s+(.+?)\s+\[[^]]+\]", RegexOptions.IgnoreCase);
+            if (found.Success)
+            {
+                detail.Name = found.Groups[1].Value.Trim();
+                continue;
+            }
+
+            var match = Regex.Match(line, @"^\s*([^:]+):\s*(.*)$");
+            if (!match.Success) continue;
+
+            var key = match.Groups[1].Value.Trim();
+            var value = match.Groups[2].Value.Trim();
+            switch (key.ToLowerInvariant())
+            {
+                case "version": detail.LatestVersion = value; break;
+                case "publisher": detail.Publisher = value; break;
+                case "description": detail.Description = value; break;
+                case "homepage": detail.Homepage = value; break;
+                case "license": detail.License = value; break;
+                case "installer sha256": detail.ExpectedHash = value; break;
+                case "installer url": detail.DownloadUrl = value; break;
+                case "release notes": detail.ReleaseNotes = value; break;
             }
         }
-        detail.IsSigned = !string.IsNullOrEmpty(detail.ExpectedHash);
-        detail.SupportsSilent = true;
+
+        // A manifest hash proves integrity, not an Authenticode signature.
+        detail.IsSigned = false;
+        detail.IsTrustedPublisher = false;
         return detail;
     }
 
-    public async Task<ActionResult> InstallAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default)
+    public Task<ActionResult> InstallAsync(
+        PackageAction action,
+        IProgress<string> progress,
+        CancellationToken ct = default)
     {
-        var args = $"install --id {action.PackageId} --accept-source-agreements --accept-package-agreements --disable-interactivity";
-        if (action.SupportsSilent) args += " --silent";
-        if (!string.IsNullOrEmpty(action.TargetVersion)) args += $" --version {action.TargetVersion}";
-
-        var result = await CliProcessRunner.RunAsync("winget", args, progress, ct, 300000);
-        return new ActionResult
+        var args = BaseActionArguments("install", action);
+        if (!string.IsNullOrWhiteSpace(action.TargetVersion))
         {
-            Success = result.Success,
-            ExitCode = result.ExitCode,
-            LogOutput = result.StandardOutput + result.StandardError,
-            ErrorMessage = result.Success ? null : ParseErrorSuggestion(result.ExitCode, result.StandardError),
-            SourceUsed = SourceId,
-            ActionPerformed = ActionType.Install,
-            PackageId = action.PackageId,
-            InstallerArgs = args
+            args.Add("--version");
+            args.Add(action.TargetVersion);
+        }
+        return RunActionAsync(args, action, ActionType.Install, progress, ct);
+    }
+
+    public Task<ActionResult> UpdateAsync(
+        PackageAction action,
+        IProgress<string> progress,
+        CancellationToken ct = default) =>
+        RunActionAsync(BaseActionArguments("upgrade", action), action, ActionType.Update, progress, ct);
+
+    public Task<ActionResult> UninstallAsync(
+        PackageAction action,
+        IProgress<string> progress,
+        CancellationToken ct = default)
+    {
+        var args = new List<string>
+        {
+            "uninstall", "--id", action.PackageId, "--exact", "--source", "winget",
+            "--accept-source-agreements", "--disable-interactivity"
         };
+        if (action.SupportsSilent) args.Add("--silent");
+        return RunActionAsync(args, action, ActionType.Uninstall, progress, ct);
     }
 
-    public async Task<ActionResult> UpdateAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default)
-    {
-        var args = $"upgrade --id {action.PackageId} --accept-source-agreements --accept-package-agreements --disable-interactivity";
-        if (action.SupportsSilent) args += " --silent";
-        
-        var result = await CliProcessRunner.RunAsync("winget", args, progress, ct, 300000);
-        return new ActionResult
-        {
-            Success = result.Success,
-            ExitCode = result.ExitCode,
-            LogOutput = result.StandardOutput + result.StandardError,
-            ErrorMessage = result.Success ? null : ParseErrorSuggestion(result.ExitCode, result.StandardError),
-            SourceUsed = SourceId,
-            ActionPerformed = ActionType.Update,
-            PackageId = action.PackageId,
-            InstallerArgs = args
-        };
-    }
-
-    public async Task<ActionResult> UninstallAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default)
-    {
-        var args = $"uninstall --id {action.PackageId} --accept-source-agreements --disable-interactivity";
-        if (action.SupportsSilent) args += " --silent";
-
-        var result = await CliProcessRunner.RunAsync("winget", args, progress, ct, 300000);
-        return new ActionResult
-        {
-            Success = result.Success,
-            ExitCode = result.ExitCode,
-            LogOutput = result.StandardOutput + result.StandardError,
-            ErrorMessage = result.Success ? null : ParseErrorSuggestion(result.ExitCode, result.StandardError),
-            SourceUsed = SourceId,
-            ActionPerformed = ActionType.Uninstall,
-            PackageId = action.PackageId,
-            InstallerArgs = args
-        };
-    }
-
-    public Task<ActionResult> RepairAsync(PackageAction action, IProgress<string> progress, CancellationToken ct = default)
-    {
-        return Task.FromResult(new ActionResult
-        {
-            Success = false,
-            ErrorMessage = "Repair not supported for WinGet",
-            SourceUsed = SourceId,
-            ActionPerformed = ActionType.Repair,
-            PackageId = action.PackageId
-        });
-    }
+    public Task<ActionResult> RepairAsync(
+        PackageAction action,
+        IProgress<string> progress,
+        CancellationToken ct = default) =>
+        RunActionAsync(BaseActionArguments("repair", action), action, ActionType.Repair, progress, ct);
 
     public async Task<List<PackageInfo>> GetInstalledPackagesAsync(CancellationToken ct = default)
     {
-        var result = await CliProcessRunner.RunAsync("winget", "list --accept-source-agreements --disable-interactivity", null, ct);
+        var result = await CliProcessRunner.RunAsync(
+            "winget",
+            new[] { "list", "--source", "winget", "--accept-source-agreements", "--disable-interactivity" },
+            ct: ct).ConfigureAwait(false);
         if (!result.Success) return new List<PackageInfo>();
 
         return ParseTabularOutput(result.StandardOutput)
-            .Select(row => new PackageInfo
+            .Select(row =>
             {
-                Id = row.ContainsKey("Id") ? row["Id"] : "",
-                Name = row.ContainsKey("Name") ? row["Name"] : "",
-                InstalledVersion = row.ContainsKey("Version") ? row["Version"] : "",
-                LatestVersion = row.ContainsKey("Available") ? row["Available"] : "",
-                IsInstalled = true,
-                AvailableSources = new List<string> { SourceId }
+                var id = Value(row, "Id", 1);
+                return new PackageInfo
+                {
+                    Id = id,
+                    Name = Value(row, "Name", 0),
+                    InstalledVersion = NullIfEmpty(Value(row, "Version", 2)),
+                    LatestVersion = row.TryGetValue("Available", out var available)
+                        ? NullIfEmpty(available)
+                        : null,
+                    IsInstalled = true,
+                    SourceId = SourceId,
+                    AvailableSources = new List<string> { SourceId },
+                    SourcePackageIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [SourceId] = id
+                    },
+                    TrustLevel = TrustLevel.Verified,
+                    SupportedActions = new List<ActionType>
+                    {
+                        ActionType.Update, ActionType.Uninstall, ActionType.Repair
+                    }
+                };
             })
-            .Where(p => !string.IsNullOrEmpty(p.Id))
+            .Where(p => !string.IsNullOrWhiteSpace(p.Id))
             .ToList();
     }
 
-    private List<Dictionary<string, string>> ParseTabularOutput(string output)
+    internal static List<IReadOnlyDictionary<string, string>> ParseTabularOutput(string output)
     {
-        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                          .Select(l => l.TrimEnd())
-                          .ToList();
-        
-        var dashLineIdx = lines.FindIndex(l => l.StartsWith("---"));
-        if (dashLineIdx <= 0) return new List<Dictionary<string, string>>();
+        var lines = output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => StripAnsi(l).TrimEnd('\r', ' '))
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .ToList();
 
-        var headerLine = lines[dashLineIdx - 1];
-        var dashes = lines[dashLineIdx];
-        var columns = new List<(string Name, int Start, int Length)>();
+        var separatorIndex = lines.FindIndex(IsSeparator);
+        if (separatorIndex <= 0) return new List<IReadOnlyDictionary<string, string>>();
 
-        int start = 0;
-        var parts = dashes.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var part in parts)
+        var header = lines[separatorIndex - 1];
+        var headerTokens = Regex.Matches(header, @"\S+")
+            .Select(m => (Name: m.Value, Start: m.Index))
+            .ToList();
+        if (headerTokens.Count < 2) return new List<IReadOnlyDictionary<string, string>>();
+
+        var columns = headerTokens
+            .Select((token, index) => (
+                token.Name,
+                token.Start,
+                Length: index + 1 < headerTokens.Count
+                    ? headerTokens[index + 1].Start - token.Start
+                    : int.MaxValue))
+            .ToList();
+
+        var rows = new List<IReadOnlyDictionary<string, string>>();
+        foreach (var line in lines.Skip(separatorIndex + 1))
         {
-            var len = part.Length;
-            var name = headerLine.Substring(start, Math.Min(len, headerLine.Length - start)).Trim();
-            columns.Add((name, start, len));
-            start += len + 1; // +1 for the space
-        }
+            if (IsSeparator(line)) continue;
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var ordered = new List<string>();
 
-        var results = new List<Dictionary<string, string>>();
-        for (int i = dashLineIdx + 1; i < lines.Count; i++)
-        {
-            var line = lines[i];
-            var dict = new Dictionary<string, string>();
-            foreach (var col in columns)
+            foreach (var column in columns)
             {
-                if (col.Start < line.Length)
-                {
-                    var val = line.Substring(col.Start, Math.Min(col.Length, line.Length - col.Start)).Trim();
-                    dict[col.Name] = val;
-                }
+                var value = column.Start >= line.Length
+                    ? string.Empty
+                    : line.Substring(
+                        column.Start,
+                        Math.Min(column.Length, line.Length - column.Start)).Trim();
+                values[column.Name] = value;
+                ordered.Add(value);
             }
-            results.Add(dict);
+
+            for (var i = 0; i < ordered.Count; i++)
+                values[$"#{i}"] = ordered[i];
+            rows.Add(values);
         }
-        return results;
+        return rows;
     }
 
-    private string? ParseErrorSuggestion(int exitCode, string stderr)
+    private static async Task<ActionResult> RunActionAsync(
+        IReadOnlyList<string> args,
+        PackageAction action,
+        ActionType actionType,
+        IProgress<string> progress,
+        CancellationToken ct)
     {
-        if (stderr.Contains("admin", StringComparison.OrdinalIgnoreCase))
-            return "Administrator privileges required. Please restart AppFlow as Admin.";
-        if (stderr.Contains("network", StringComparison.OrdinalIgnoreCase))
-            return "Network error. Please check your internet connection.";
-        return "Command failed. See log output for details.";
+        var result = await CliProcessRunner.RunAsync(
+            "winget", args, progress, ct, timeoutMs: 300000).ConfigureAwait(false);
+        return new ActionResult
+        {
+            Success = result.Success,
+            ExitCode = result.ExitCode,
+            LogOutput = result.StandardOutput + result.StandardError,
+            ErrorMessage = result.Success ? null : "WinGet could not complete the requested action.",
+            ErrorSuggestion = result.Success ? null : ParseErrorSuggestion(result.StandardError),
+            SourceUsed = "winget",
+            ActionPerformed = actionType,
+            PackageId = action.PackageId,
+            InstallerArgs = CliProcessRunner.FormatArguments(args)
+        };
+    }
+
+    private static List<string> BaseActionArguments(string verb, PackageAction action)
+    {
+        var args = new List<string>
+        {
+            verb, "--id", action.PackageId, "--exact", "--source", "winget",
+            "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"
+        };
+        if (action.SupportsSilent) args.Add("--silent");
+        return args;
+    }
+
+    private static string Value(IReadOnlyDictionary<string, string> row, string name, int index) =>
+        row.TryGetValue(name, out var named)
+            ? named
+            : row.TryGetValue($"#{index}", out var positional) ? positional : string.Empty;
+
+    private static string? NullIfEmpty(string value) =>
+        string.IsNullOrWhiteSpace(value) || value == "-" ? null : value;
+
+    private static bool IsSeparator(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.Length >= 3 && trimmed.All(c => c is '-' or ' ');
+    }
+
+    private static string StripAnsi(string value) =>
+        Regex.Replace(value, "\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])", string.Empty);
+
+    private static string ParseErrorSuggestion(string stderr)
+    {
+        if (stderr.Contains("admin", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("elevation", StringComparison.OrdinalIgnoreCase))
+            return "Administrator privileges are required. Restart AppFlow as administrator.";
+        if (stderr.Contains("network", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("internet", StringComparison.OrdinalIgnoreCase))
+            return "Check your internet connection and try again.";
+        if (stderr.Contains("not found", StringComparison.OrdinalIgnoreCase))
+            return "Refresh the source and verify the package ID.";
+        return "Review the live log, refresh WinGet sources, and try again.";
     }
 }

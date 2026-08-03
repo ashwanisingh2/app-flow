@@ -10,7 +10,10 @@ public class ValidationResult
     public List<string> Errors { get; set; } = new();
     public bool RequiresUserConfirmation { get; set; }
     public string? ConfirmationMessage { get; set; }
+    public bool HashChecked { get; set; }
     public bool HashValid { get; set; } = true;
+    public bool SignatureChecked { get; set; }
+    public bool SignatureValid { get; set; }
     public bool BlockInstall { get; set; }
 
     public void AddWarning(string msg) => Warnings.Add(msg);
