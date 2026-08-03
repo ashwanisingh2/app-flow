@@ -1,0 +1,37 @@
+<Application
+    x:Class="AppFlow.UI.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AppFlow.UI"
+    xmlns:converters="using:AppFlow.UI.Converters">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- AppFlow Brand Colors -->
+            <Color x:Key="AppFlowAccentColor">#6C5CE7</Color>
+            <Color x:Key="AppFlowAccentLightColor">#A29BFE</Color>
+            <Color x:Key="AppFlowSuccessColor">#00B894</Color>
+            <Color x:Key="AppFlowWarningColor">#FDCB6E</Color>
+            <Color x:Key="AppFlowDangerColor">#E17055</Color>
+
+            <SolidColorBrush x:Key="AppFlowAccentBrush" Color="{StaticResource AppFlowAccentColor}" />
+            <SolidColorBrush x:Key="AppFlowAccentLightBrush" Color="{StaticResource AppFlowAccentLightColor}" />
+            <SolidColorBrush x:Key="AppFlowSuccessBrush" Color="{StaticResource AppFlowSuccessColor}" />
+            <SolidColorBrush x:Key="AppFlowWarningBrush" Color="{StaticResource AppFlowWarningColor}" />
+            <SolidColorBrush x:Key="AppFlowDangerBrush" Color="{StaticResource AppFlowDangerColor}" />
+
+            <!-- Card Styles -->
+            <CornerRadius x:Key="AppFlowCardCornerRadius">8</CornerRadius>
+            <Thickness x:Key="AppFlowCardPadding">16</Thickness>
+            <Thickness x:Key="AppFlowCardMargin">4</Thickness>
+
+            <converters:BoolNegationConverter x:Key="BoolNegationConverter" />
+
+        </ResourceDictionary>
+    </Application.Resources>
+
+</Application>

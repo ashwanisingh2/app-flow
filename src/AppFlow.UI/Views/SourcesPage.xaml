@@ -1,0 +1,47 @@
+<Page
+    x:Class="AppFlow.UI.Views.SourcesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AppFlow.UI.Views"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+    <Grid RowSpacing="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Package Sources" Style="{ThemeResource TitleTextBlockStyle}" FontWeight="SemiBold"/>
+
+        <StackPanel Grid.Row="1" Spacing="16">
+            <Border CornerRadius="{StaticResource AppFlowCardCornerRadius}" 
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                    Padding="{StaticResource AppFlowCardPadding}">
+                <StackPanel Orientation="Horizontal">
+                    <StackPanel>
+                        <TextBlock Text="Windows Package Manager (WinGet)" FontWeight="SemiBold"/>
+                        <TextBlock Text="Official Microsoft source. High trust." Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <ToggleSwitch IsOn="True" Margin="auto,0,0,0" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+            
+            <Border CornerRadius="{StaticResource AppFlowCardCornerRadius}" 
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                    Padding="{StaticResource AppFlowCardPadding}">
+                <StackPanel Orientation="Horizontal">
+                    <StackPanel>
+                        <TextBlock Text="Chocolatey" FontWeight="SemiBold"/>
+                        <TextBlock Text="Community maintained packages. High trust." Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <ToggleSwitch IsOn="True" Margin="auto,0,0,0" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </Grid>
+</Page>

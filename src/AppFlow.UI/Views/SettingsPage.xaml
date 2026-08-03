@@ -1,0 +1,46 @@
+<Page
+    x:Class="AppFlow.UI.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AppFlow.UI.Views"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+    <StackPanel Spacing="24">
+        <TextBlock Text="Settings" Style="{ThemeResource TitleTextBlockStyle}" FontWeight="SemiBold"/>
+
+        <StackPanel Spacing="12">
+            <TextBlock Text="Appearance" Style="{ThemeResource SubtitleTextBlockStyle}" FontWeight="SemiBold"/>
+            <RadioButtons SelectedItem="{x:Bind ViewModel.SelectedTheme, Mode=TwoWay}">
+                <x:String>Light</x:String>
+                <x:String>Dark</x:String>
+                <x:String>System</x:String>
+            </RadioButtons>
+        </StackPanel>
+
+        <StackPanel Spacing="12">
+            <TextBlock Text="Security" Style="{ThemeResource SubtitleTextBlockStyle}" FontWeight="SemiBold"/>
+            <ToggleSwitch Header="Enable Security Validation" 
+                          IsOn="{x:Bind ViewModel.EnableSecurityValidation, Mode=TwoWay}"/>
+            <TextBlock Text="Checks signatures, trusts, and hashes before installing." 
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Margin="0,-8,0,0"/>
+            
+            <ToggleSwitch Header="Enable Source Locking" 
+                          IsOn="{x:Bind ViewModel.EnableSourceLocking, Mode=TwoWay}"/>
+            <TextBlock Text="Prevents updates from a different source than the one originally used." 
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Margin="0,-8,0,0"/>
+        </StackPanel>
+        
+        <StackPanel Spacing="12">
+            <TextBlock Text="Data" Style="{ThemeResource SubtitleTextBlockStyle}" FontWeight="SemiBold"/>
+            <Button Content="Export Package List" Command="{x:Bind ViewModel.ExportPackageListCommand}"/>
+        </StackPanel>
+
+        <StackPanel Spacing="4" Margin="0,24,0,0">
+            <TextBlock Text="AppFlow" FontWeight="SemiBold"/>
+            <TextBlock Text="Version 1.0.0" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </StackPanel>
+    </StackPanel>
+</Page>

@@ -1,0 +1,25 @@
+<UserControl
+    x:Class="AppFlow.UI.Controls.ActionPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AppFlow.UI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <StackPanel Spacing="12">
+        <Button x:Name="InstallBtn" Content="Install" HorizontalAlignment="Stretch" Style="{ThemeResource AccentButtonStyle}"
+                Click="InstallBtn_Click" IsEnabled="{x:Bind IsExecuting, Mode=OneWay, Converter={StaticResource BoolNegationConverter}}"
+                Visibility="{x:Bind IsInstalled, Mode=OneWay, Converter={StaticResource BoolNegationConverter}}"/>
+        
+        <Button x:Name="UpdateBtn" Content="Update" HorizontalAlignment="Stretch" 
+                Click="UpdateBtn_Click" IsEnabled="{x:Bind IsExecuting, Mode=OneWay, Converter={StaticResource BoolNegationConverter}}"
+                Visibility="{x:Bind HasUpdate, Mode=OneWay}"/>
+                
+        <Button x:Name="UninstallBtn" Content="Uninstall" HorizontalAlignment="Stretch" 
+                Click="UninstallBtn_Click" IsEnabled="{x:Bind IsExecuting, Mode=OneWay, Converter={StaticResource BoolNegationConverter}}"
+                Visibility="{x:Bind IsInstalled, Mode=OneWay}"/>
+                
+        <ProgressBar IsIndeterminate="True" Visibility="{x:Bind IsExecuting, Mode=OneWay}" Margin="0,12,0,0"/>
+    </StackPanel>
+</UserControl>
