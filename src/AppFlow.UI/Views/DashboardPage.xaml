@@ -73,8 +73,8 @@
                 <ListView.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Orientation="Horizontal" Spacing="12" Padding="0,8">
-                            <FontIcon Glyph="&#xE73E;" Foreground="{StaticResource AppFlowSuccessBrush}" 
-                                      Visibility="{Binding Success}"/>
+                            <FontIcon Glyph="&#xE73E;" Foreground="{StaticResource AppFlowSuccessBrush}"
+                                      Visibility="{Binding Success, Converter={StaticResource BoolToVisibilityConverter}}"/>
                             <FontIcon Glyph="&#xE711;" Foreground="{StaticResource AppFlowDangerBrush}" 
                                       Visibility="{Binding Success, Converter={StaticResource BoolNegationConverter}}"/>
                             <TextBlock Text="{Binding PackageName}" FontWeight="SemiBold" VerticalAlignment="Center"/>

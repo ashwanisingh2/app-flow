@@ -5,58 +5,60 @@ using AppFlow.Core.Models;
 using Serilog;
 using System.Collections.Concurrent;
 
-public class LogService : ILogService
+public sealed class LogService : ILogService, IDisposable
 {
-    private readonly ConcurrentQueue<string> _recentLogs = new();
     private const int MaxLogs = 1000;
+    private readonly ConcurrentQueue<string> _recentLogs = new();
+    private readonly ILogger _logger;
 
     public LogService()
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var logPath = Path.Combine(appData, "AppFlow", "logs", "appflow-.log");
-
-        Log.Logger = new LoggerConfiguration()
+        var logDirectory = Path.Combine(appData, "AppFlow", "logs");
+        Directory.CreateDirectory(logDirectory);
+        _logger = new LoggerConfiguration()
             .MinimumLevel.Information()
-            .WriteTo.File(logPath, rollingInterval: RollingInterval.Day)
+            .WriteTo.File(
+                Path.Combine(logDirectory, "appflow-.log"),
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 14)
             .CreateLogger();
     }
 
     public void LogInfo(string msg)
     {
-        Log.Information(msg);
+        _logger.Information("{Message}", msg);
         EnqueueLog($"INFO: {msg}");
     }
 
     public void LogWarning(string msg)
     {
-        Log.Warning(msg);
+        _logger.Warning("{Message}", msg);
         EnqueueLog($"WARN: {msg}");
     }
 
     public void LogError(string msg, Exception? ex = null)
     {
-        Log.Error(ex, msg);
-        EnqueueLog($"ERROR: {msg} - {ex?.Message}");
+        _logger.Error(ex, "{Message}", msg);
+        EnqueueLog($"ERROR: {msg}" + (ex is null ? string.Empty : $" - {ex.Message}"));
     }
 
-    public void LogAction(ActionResult result)
-    {
-        var msg = $"Action {result.ActionPerformed} on {result.PackageId} via {result.SourceUsed}. Success: {result.Success}";
-        LogInfo(msg);
-    }
+    public void LogAction(ActionResult result) =>
+        LogInfo($"Action {result.ActionPerformed} on {result.PackageId} via {result.SourceUsed}. Success: {result.Success}");
 
-    public List<string> GetRecentLogs(int count = 100)
+    public List<string> GetRecentLogs(int count = 100) =>
+        _recentLogs.TakeLast(Math.Clamp(count, 0, MaxLogs)).ToList();
+
+    public void Dispose()
     {
-        return _recentLogs.TakeLast(count).ToList();
+        if (_logger is IDisposable disposable)
+            disposable.Dispose();
     }
 
     private void EnqueueLog(string msg)
     {
-        var formatted = $"[{DateTime.UtcNow:O}] {msg}";
-        _recentLogs.Enqueue(formatted);
+        _recentLogs.Enqueue($"[{DateTime.UtcNow:O}] {msg}");
         while (_recentLogs.Count > MaxLogs)
-        {
             _recentLogs.TryDequeue(out _);
-        }
     }
 }

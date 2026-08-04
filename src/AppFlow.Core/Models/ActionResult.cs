@@ -14,4 +14,7 @@ public class ActionResult
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public ActionType ActionPerformed { get; set; }
     public string PackageId { get; set; } = string.Empty;
+    public bool RequiresConfirmation { get; set; }
+    public string? ConfirmationMessage { get; set; }
+    public bool WasCancelled { get; set; }
 }

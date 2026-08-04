@@ -1,99 +1,114 @@
 namespace AppFlow.UI;
 
+using AppFlow.Core.Models;
+using AppFlow.Database.Repositories;
+using AppFlow.UI.Views;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Navigation;
 
-using AppFlow.UI.Views;
-
-/// <summary>
-/// Main application window with NavigationView shell.
-/// </summary>
+/// <summary>Main application window with NavigationView shell.</summary>
 public sealed partial class MainWindow : Window
 {
     public MainWindow()
     {
-        this.InitializeComponent();
-
-        // Set up title bar
+        InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-
-        // Try to apply Mica backdrop (Win11), fallback to default
         TrySetMicaBackdrop();
-
-        // Navigate to dashboard on startup
         ContentFrame.Navigate(typeof(DashboardPage));
-
-        // Select the first nav item
         NavView.SelectedItem = NavView.MenuItems[0];
+    }
+
+    public void ApplyTheme(string theme)
+    {
+        RootGrid.RequestedTheme = theme switch
+        {
+            "Light" => ElementTheme.Light,
+            "Dark" => ElementTheme.Dark,
+            _ => ElementTheme.Default
+        };
+        var dark = RootGrid.ActualTheme == ElementTheme.Dark
+                   || RootGrid.RequestedTheme == ElementTheme.Dark;
+        ThemeToggle.IsChecked = dark;
+        ThemeIcon.Glyph = dark ? "\uE706" : "\uE793";
+    }
+
+    public async Task ShowStartupErrorAsync(string message)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            Title = "AppFlow startup problem",
+            Content = message,
+            CloseButtonText = "Close"
+        };
+        await dialog.ShowAsync();
     }
 
     private void TrySetMicaBackdrop()
     {
         if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
-        {
             SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
+    }
+
+    private void NavView_SelectionChanged(
+        NavigationView sender,
+        NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItemContainer is not NavigationViewItem item) return;
+
+        var pageType = item.Tag?.ToString() switch
+        {
+            "dashboard" => typeof(DashboardPage),
+            "search" => typeof(SearchPage),
+            "favorites" => typeof(FavoritesPage),
+            "history" => typeof(HistoryPage),
+            "sources" => typeof(SourcesPage),
+            "settings" => typeof(SettingsPage),
+            _ => typeof(DashboardPage)
+        };
+
+        if (ContentFrame.CurrentSourcePageType != pageType)
+        {
+            ContentFrame.Navigate(
+                pageType,
+                null,
+                new Microsoft.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo());
         }
     }
 
-    private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    private void NavView_BackRequested(
+        NavigationView sender,
+        NavigationViewBackRequestedEventArgs args)
     {
-        if (args.SelectedItemContainer is NavigationViewItem item)
-        {
-            var tag = item.Tag?.ToString();
-            var pageType = tag switch
-            {
-                "dashboard" => typeof(DashboardPage),
-                "search" => typeof(SearchPage),
-                "favorites" => typeof(FavoritesPage),
-                "history" => typeof(HistoryPage),
-                "sources" => typeof(SourcesPage),
-                "settings" => typeof(SettingsPage),
-                _ => typeof(DashboardPage)
-            };
-
-            if (ContentFrame.CurrentSourcePageType != pageType)
-            {
-                ContentFrame.Navigate(pageType, null, new Microsoft.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo());
-            }
-        }
+        if (ContentFrame.CanGoBack) ContentFrame.GoBack();
     }
 
-    private void NavView_BackRequested(NavigationView sender, NavigationViewBackRequestedEventArgs args)
+    private void GlobalSearchBox_QuerySubmitted(
+        AutoSuggestBox sender,
+        AutoSuggestBoxQuerySubmittedEventArgs args)
     {
-        if (ContentFrame.CanGoBack)
-        {
-            ContentFrame.GoBack();
-        }
+        if (string.IsNullOrWhiteSpace(args.QueryText)) return;
+        ContentFrame.Navigate(typeof(SearchPage), args.QueryText.Trim());
+        NavView.SelectedItem = NavView.MenuItems[1];
     }
 
-    private void GlobalSearchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    private async void ThemeToggle_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(args.QueryText))
-        {
-            // Navigate to search page with query
-            ContentFrame.Navigate(typeof(SearchPage), args.QueryText);
+        var nextTheme = RootGrid.ActualTheme == ElementTheme.Dark ? "Light" : "Dark";
+        ApplyTheme(nextTheme);
 
-            // Select the search nav item
-            NavView.SelectedItem = NavView.MenuItems[1];
+        var settings = App.Current.Services.GetRequiredService<AppSettings>();
+        settings.Theme = nextTheme;
+        try
+        {
+            await App.Current.Services.GetRequiredService<SettingsRepository>()
+                .SaveAppSettingsAsync(settings);
         }
-    }
-
-    private void ThemeToggle_Click(object sender, RoutedEventArgs e)
-    {
-        if (Content is FrameworkElement rootElement)
+        catch (Exception)
         {
-            if (rootElement.ActualTheme == ElementTheme.Dark)
-            {
-                rootElement.RequestedTheme = ElementTheme.Light;
-                ThemeIcon.Glyph = "\uE793"; // Moon icon
-            }
-            else
-            {
-                rootElement.RequestedTheme = ElementTheme.Dark;
-                ThemeIcon.Glyph = "\uE706"; // Sun icon
-            }
+            // Theme remains applied for this session if persistence is unavailable.
         }
     }
 }

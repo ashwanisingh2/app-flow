@@ -5,68 +5,86 @@ using AppFlow.Core.Models;
 using AppFlow.Core.Services;
 using FluentAssertions;
 using Moq;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Xunit;
 
 public class SourceResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_ShouldReturnBestScoredSource()
+    public async Task ResolveAsync_MultipleSourcesAvailable_ReturnsBestScore()
     {
-        // Arrange
-        var adapters = new List<ISourceAdapter>();
+        var low = Adapter("offline", 1, new PackageDetail { Id = "test", Name = "Test" });
+        var high = Adapter("winget", 5, new PackageDetail
+        {
+            Id = "test",
+            Name = "Test",
+            IsOfficialSource = true,
+            IsSigned = true,
+            LatestVersion = "1.0"
+        });
+        var resolver = CreateResolver(low.Object, high.Object);
 
-        var mockA = new Mock<ISourceAdapter>();
-        mockA.Setup(x => x.IsAvailable).Returns(true);
-        mockA.Setup(x => x.SourceId).Returns("offline");
-        mockA.Setup(x => x.TrustScore).Returns(1);
-        mockA.Setup(x => x.GetDetailsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-             .ReturnsAsync(new PackageDetail { SourceId = "offline", SourceTrustScore = 1 });
+        var result = await resolver.ResolveAsync("test");
 
-        var mockB = new Mock<ISourceAdapter>();
-        mockB.Setup(x => x.IsAvailable).Returns(true);
-        mockB.Setup(x => x.SourceId).Returns("winget");
-        mockB.Setup(x => x.TrustScore).Returns(5);
-        mockB.Setup(x => x.GetDetailsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-             .ReturnsAsync(new PackageDetail { SourceId = "winget", SourceTrustScore = 5, IsOfficialSource = true, ExpectedHash = "hash123" });
-
-        adapters.Add(mockA.Object);
-        adapters.Add(mockB.Object);
-
-        var resolver = new SourceResolver(adapters);
-
-        // Act
-        var result = await resolver.ResolveAsync("test-package");
-
-        // Assert
         result.BestMatch.Should().NotBeNull();
-        result.BestMatch!.SourceId.Should().Be("winget"); // Because winget has higher trust and official source + hash
+        result.BestMatch!.SourceId.Should().Be("winget");
+        result.AllOptions.Should().HaveCount(2);
     }
 
     [Fact]
-    public async Task ResolveAsync_OneAdapterFails_ShouldStillReturnFromOthers()
+    public async Task ResolveAsync_PreferredSourceAvailable_SelectsItWithoutLosingRecommendation()
     {
-        // Arrange
-        var mockFail = new Mock<ISourceAdapter>();
-        mockFail.Setup(x => x.IsAvailable).Returns(true);
-        mockFail.Setup(x => x.GetDetailsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ThrowsAsync(new System.Exception("Network error"));
+        var low = Adapter("scoop", 3, new PackageDetail { Id = "test", Name = "Test" });
+        var high = Adapter("winget", 5, new PackageDetail
+        {
+            Id = "test", Name = "Test", IsOfficialSource = true, IsSigned = true
+        });
+        var resolver = CreateResolver(low.Object, high.Object);
 
-        var mockSuccess = new Mock<ISourceAdapter>();
-        mockSuccess.Setup(x => x.IsAvailable).Returns(true);
-        mockSuccess.Setup(x => x.SourceId).Returns("choco");
-        mockSuccess.Setup(x => x.GetDetailsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                   .ReturnsAsync(new PackageDetail { SourceId = "choco", SourceTrustScore = 4 });
+        var result = await resolver.ResolveAsync("test", "scoop");
 
-        var resolver = new SourceResolver(new[] { mockFail.Object, mockSuccess.Object });
+        result.BestMatch!.SourceId.Should().Be("scoop");
+        result.RecommendedSourceId.Should().Be("winget");
+    }
 
-        // Act
+    [Fact]
+    public async Task ResolveAsync_OneSourceFails_OthersStillReturn()
+    {
+        var failed = new Mock<ISourceAdapter>();
+        failed.SetupGet(x => x.IsAvailable).Returns(true);
+        failed.SetupGet(x => x.SourceId).Returns("failed");
+        failed.Setup(x => x.GetDetailsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("provider failed"));
+        var healthy = Adapter("chocolatey", 4, new PackageDetail { Id = "test", Name = "Test" });
+        var resolver = CreateResolver(failed.Object, healthy.Object);
+
         var result = await resolver.ResolveAsync("test");
 
-        // Assert
         result.BestMatch.Should().NotBeNull();
-        result.BestMatch!.SourceId.Should().Be("choco");
+        result.BestMatch!.SourceId.Should().Be("chocolatey");
+    }
+
+    [Fact]
+    public async Task ResolveAsync_AllSourcesFail_ReturnsEmptyResult()
+    {
+        var failed = Adapter("winget", 5, detail: null);
+        var resolver = CreateResolver(failed.Object);
+
+        var result = await resolver.ResolveAsync("missing");
+
+        result.BestMatch.Should().BeNull();
+        result.AllOptions.Should().BeEmpty();
+    }
+
+    private static SourceResolver CreateResolver(params ISourceAdapter[] adapters) =>
+        new(adapters, new SourceRegistry(), new AppSettings { QueryTimeoutSeconds = 5 });
+
+    private static Mock<ISourceAdapter> Adapter(string id, int trust, PackageDetail? detail)
+    {
+        var adapter = new Mock<ISourceAdapter>();
+        adapter.SetupGet(x => x.IsAvailable).Returns(true);
+        adapter.SetupGet(x => x.SourceId).Returns(id);
+        adapter.SetupGet(x => x.TrustScore).Returns(trust);
+        adapter.Setup(x => x.GetDetailsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(detail);
+        return adapter;
     }
 }

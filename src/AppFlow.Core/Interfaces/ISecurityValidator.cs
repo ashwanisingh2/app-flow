@@ -4,5 +4,8 @@ using AppFlow.Core.Models;
 
 public interface ISecurityValidator
 {
-    Task<ValidationResult> ValidateAsync(PackageAction action, SourceQueryResult source);
+    Task<ValidationResult> ValidateAsync(
+        PackageAction action,
+        SourceQueryResult source,
+        CancellationToken ct = default);
 }

@@ -2,31 +2,73 @@
     x:Class="AppFlow.UI.Views.HistoryPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:AppFlow.UI.Views"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+    Loaded="Page_Loaded">
 
-    <Grid RowSpacing="24">
+    <Grid RowSpacing="16">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Orientation="Horizontal" Spacing="16">
-            <TextBlock Text="Action History" Style="{ThemeResource TitleTextBlockStyle}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <TextBox PlaceholderText="Search history..." Width="200" VerticalAlignment="Center"/>
-            <ComboBox PlaceholderText="Filter action" VerticalAlignment="Center" Width="150">
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Action History" Style="{ThemeResource TitleTextBlockStyle}" FontWeight="SemiBold"/>
+            <Button Grid.Column="1" Content="Clear history" Command="{x:Bind ViewModel.ClearCommand}"/>
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="180"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Text="{x:Bind ViewModel.SearchQuery, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     PlaceholderText="Search package name or ID..."/>
+            <ComboBox Grid.Column="1" SelectedItem="{x:Bind ViewModel.SelectedAction, Mode=TwoWay}">
                 <x:String>All</x:String>
                 <x:String>Install</x:String>
                 <x:String>Update</x:String>
                 <x:String>Uninstall</x:String>
+                <x:String>Repair</x:String>
             </ComboBox>
-        </StackPanel>
+        </Grid>
 
-        <ListView Grid.Row="1">
-            <!-- Binding omitted for simplicity of MVP, logic goes to viewmodel -->
-        </ListView>
+        <TextBlock Grid.Row="2" Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+
+        <Grid Grid.Row="3">
+            <ListView ItemsSource="{x:Bind ViewModel.Entries, Mode=OneWay}">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Padding="4,10" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="110"/>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding PackageName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Grid.Column="1" Text="{Binding ActionType}"/>
+                            <TextBlock Grid.Column="2" Text="{Binding SourceUsed}"/>
+                            <TextBlock Grid.Column="3" Text="{Binding StatusText}"/>
+                            <TextBlock Grid.Column="4" Text="{Binding DisplayTimestamp}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <ProgressRing IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                          Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Grid>
     </Grid>
 </Page>

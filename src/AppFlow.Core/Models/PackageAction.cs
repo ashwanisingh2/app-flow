@@ -13,4 +13,10 @@ public class PackageAction
     public bool SupportsPortable { get; set; }
     public string? CustomArgs { get; set; }
     public string? TargetVersion { get; set; }
+
+    /// <summary>
+    /// Set only after the user explicitly accepts a validator warning.
+    /// It never bypasses a hard integrity failure.
+    /// </summary>
+    public bool UserConfirmedRisk { get; set; }
 }

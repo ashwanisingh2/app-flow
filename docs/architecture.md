@@ -1,38 +1,46 @@
 # AppFlow Architecture
 
-## Layer Overview
+## Projects
 
-AppFlow is divided into 5 distinct projects to ensure separation of concerns:
+1. **AppFlow.UI**
+   - WinUI 3 shell, pages, controls, and CommunityToolkit MVVM view models.
+   - Owns user confirmation dialogs and presentation-only state.
 
-1. **AppFlow.UI (WinUI 3)**
-   - Responsible solely for presentation and view logic.
-   - Uses `CommunityToolkit.Mvvm` for ViewModels.
-   - Implements Windows 11 Mica backdrop design.
+2. **AppFlow.Core**
+   - Domain models and source contracts.
+   - Concurrent search, source scoring, mandatory validation, source locking, and action orchestration.
+   - Depends on persistence interfaces rather than SQLite.
 
-2. **AppFlow.Core (.NET 8 Class Library)**
-   - Contains all the domain models, enums, and interfaces.
-   - Contains core business logic services: `ActionEngine`, `SourceResolver`, `SecurityValidator`.
-   - Has no dependencies on UI or Database frameworks.
+3. **AppFlow.Sources**
+   - Implements `ISourceAdapter` for WinGet, Chocolatey, Scoop, GitHub Releases, and local installers.
+   - CLI adapters pass discrete arguments through `ProcessStartInfo.ArgumentList` and stream stdout/stderr.
 
-3. **AppFlow.Sources (.NET 8 Class Library)**
-   - Implements the `ISourceAdapter` plugin interface from Core.
-   - Contains CLI wrappers (`CliProcessRunner`) to interface with `winget`, `choco`, `scoop`, etc.
-   - Contains HTTP logic for `GitHubAdapter`.
+4. **AppFlow.Database**
+   - Implements Core persistence contracts with SQLite and Dapper.
+   - Embeds and applies the idempotent initial migration.
 
-4. **AppFlow.Database (.NET 8 Class Library)**
-   - SQLite integration using `Microsoft.Data.Sqlite` and `Dapper`.
-   - Handles the `appflow.db` lifecycle (creation and migrations).
-   - Exposes Repositories (`InstallRecordRepository`, `FavoritesRepository`, `HistoryRepository`).
+5. **AppFlow.Tests**
+   - Tests source isolation/scoring, integrity policy, source locking, duplicate prevention, result merging, WinGet parsing, and SQLite mappings.
 
-5. **AppFlow.Tests (xUnit)**
-   - Unit tests for the core logic, resolvers, validators, and adapters using `Moq` and `FluentAssertions`.
+## Install flow
 
-## Data Flow (Install Action)
-1. **User clicks Install** in `AppDetailPage` (UI)
-2. `AppDetailViewModel` creates a `PackageAction` request and passes it to `IActionEngine` (Core).
-3. `IActionEngine` runs the `ISecurityValidator` (Core) pipeline to ensure the package is safe.
-4. `IActionEngine` looks up the correct `ISourceAdapter` from `AppFlow.Sources`.
-5. The Adapter (e.g., `WinGetAdapter`) uses `CliProcessRunner` to execute the CLI command in the background.
-6. The CLI standard output is streamed back via `IProgress<string>` to the ViewModel for the UI LogViewer.
-7. Upon completion, `IActionEngine` writes an `InstallRecord` to the Database (via Repo) to lock the source for future updates.
-8. The `ActionHistory` is recorded to the SQLite Database.
+1. Search adapters run concurrently; unavailable or disabled sources are excluded.
+2. Navigation preserves the package ID and source selected by the user.
+3. `AppDetailViewModel` sends both the action and resolved source metadata to `IActionEngine`.
+4. `ActionEngine` serializes operations per package and checks `IInstallRecordStore` for duplicates/source locks.
+5. `SecurityValidator` enforces HTTPS and validates a supplied SHA-256 hash by streaming the installer. Local files are checked with WinVerifyTrust.
+6. A low-trust or insufficiently signed package returns a confirmation request to the UI. A hard integrity failure cannot be overridden.
+7. The selected adapter executes the action and streams output to the live log.
+8. A successful install/update updates the install record; uninstall removes it.
+9. Successes and failures are written through `IActionHistoryStore` and to the rolling application log.
+
+## Source locking
+
+`InstallRecord.LockedSource` is authoritative for update, repair, and uninstall operations. If a UI request names another source, `ActionEngine` routes it back to the locked source. Duplicate installs are rejected while a record exists.
+
+## Cancellation and failure isolation
+
+- Search and resolution have linked timeout/caller cancellation tokens.
+- Cancellation is not swallowed inside individual adapters.
+- A provider failure is isolated at the aggregation boundary so healthy providers still return results.
+- Unexpected internal details are written to logs; the UI receives a plain-language message.

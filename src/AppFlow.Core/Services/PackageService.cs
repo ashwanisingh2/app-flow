@@ -2,89 +2,256 @@ namespace AppFlow.Core.Services;
 
 using AppFlow.Core.Interfaces;
 using AppFlow.Core.Models;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
-public class PackageService : IPackageService
+public sealed class PackageService : IPackageService
 {
     private readonly IEnumerable<ISourceAdapter> _adapters;
     private readonly SourceResolver _resolver;
+    private readonly SourceRegistry _sourceRegistry;
+    private readonly AppSettings _settings;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SearchCacheEntry> _searchCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _installedCacheLock = new(1, 1);
+    private InstalledCacheEntry? _installedCache;
 
-    public PackageService(IEnumerable<ISourceAdapter> adapters, SourceResolver resolver)
+    public PackageService(
+        IEnumerable<ISourceAdapter> adapters,
+        SourceResolver resolver,
+        SourceRegistry sourceRegistry,
+        AppSettings settings)
     {
         _adapters = adapters;
         _resolver = resolver;
+        _sourceRegistry = sourceRegistry;
+        _settings = settings;
     }
 
-    public async Task<List<PackageInfo>> SearchAllSourcesAsync(string query, CancellationToken ct = default)
+    public async Task<List<PackageInfo>> SearchAllSourcesAsync(
+        string query,
+        CancellationToken ct = default)
     {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        if (string.IsNullOrWhiteSpace(query))
+            return new List<PackageInfo>();
 
-        var tasks = _adapters.Where(a => a.IsAvailable)
-                             .Select(a => SearchSafeAsync(a, query, cts.Token));
+        var normalizedQuery = query.Trim();
+        if (_searchCache.TryGetValue(normalizedQuery, out var cached)
+            && cached.SourceRegistryVersion == _sourceRegistry.Version
+            && DateTimeOffset.UtcNow - cached.CreatedAt < TimeSpan.FromSeconds(30))
+        {
+            return cached.Packages.ToList();
+        }
 
-        var resultsArray = await Task.WhenAll(tasks);
-        
-        var merged = resultsArray.SelectMany(r => r)
-                                 .GroupBy(p => p.Id)
-                                 .Select(g => g.OrderByDescending(p => p.TrustLevel).First())
-                                 .ToList();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(_settings.QueryTimeoutSeconds, 1, 60)));
 
-        return merged;
-    }
-
-    private async Task<List<PackageInfo>> SearchSafeAsync(ISourceAdapter adapter, string query, CancellationToken ct)
-    {
+        var activeAdapters = await GetActiveAdaptersAsync(timeout.Token).ConfigureAwait(false);
+        var tasks = activeAdapters.Select(a => SearchSafeAsync(a, normalizedQuery, timeout.Token));
+        List<PackageInfo>[] results;
         try
         {
-            return await adapter.SearchAsync(query, ct);
+            results = await Task.WhenAll(tasks).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return new List<PackageInfo>();
+            throw;
         }
+        catch (OperationCanceledException)
+        {
+            results = Array.Empty<List<PackageInfo>>();
+        }
+
+        var merged = MergePackages(results.SelectMany(r => r))
+            .Take(Math.Clamp(_settings.MaxSearchResults, 1, 500))
+            .ToList();
+
+        try
+        {
+            var installed = await GetInstalledPackagesAsync(timeout.Token).ConfigureAwait(false);
+            var installedById = installed.ToDictionary(
+                package => package.Id,
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var package in merged)
+            {
+                if (!installedById.TryGetValue(package.Id, out var match)) continue;
+                package.IsInstalled = true;
+                package.InstalledVersion = match.InstalledVersion;
+                package.LatestVersion ??= match.LatestVersion;
+                package.SupportedActions = match.SupportedActions;
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Search results remain useful even if installed-state correlation times out.
+        }
+
+        _searchCache[normalizedQuery] = new SearchCacheEntry(
+            DateTimeOffset.UtcNow,
+            _sourceRegistry.Version,
+            merged);
+        return merged.ToList();
     }
 
-    public async Task<PackageDetail?> GetPackageDetailAsync(string packageId, CancellationToken ct = default)
+    public async Task<PackageDetail?> GetPackageDetailAsync(
+        string packageId,
+        CancellationToken ct = default)
     {
-        var result = await _resolver.ResolveAsync(packageId, ct);
-        if (result.BestMatch == null)
-            return null;
-
-        var adapter = _adapters.FirstOrDefault(a => a.SourceId == result.BestMatch.SourceId);
-        if (adapter == null) return null;
-
-        return await adapter.GetDetailsAsync(packageId, ct);
+        var result = await _resolver.ResolveAsync(packageId, ct).ConfigureAwait(false);
+        return result.BestMatch?.Detail;
     }
 
     public async Task<List<PackageInfo>> GetInstalledPackagesAsync(CancellationToken ct = default)
     {
-        var tasks = _adapters.Where(a => a.IsAvailable)
-                             .Select(a => GetInstalledSafeAsync(a, ct));
+        var cache = _installedCache;
+        if (cache is not null
+            && cache.SourceRegistryVersion == _sourceRegistry.Version
+            && DateTimeOffset.UtcNow - cache.CreatedAt < TimeSpan.FromSeconds(30))
+        {
+            return cache.Packages.ToList();
+        }
 
-        var resultsArray = await Task.WhenAll(tasks);
-        
-        return resultsArray.SelectMany(r => r).ToList();
-    }
-
-    private async Task<List<PackageInfo>> GetInstalledSafeAsync(ISourceAdapter adapter, CancellationToken ct)
-    {
+        await _installedCacheLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            return await adapter.GetInstalledPackagesAsync(ct);
+            cache = _installedCache;
+            if (cache is not null
+                && cache.SourceRegistryVersion == _sourceRegistry.Version
+                && DateTimeOffset.UtcNow - cache.CreatedAt < TimeSpan.FromSeconds(30))
+            {
+                return cache.Packages.ToList();
+            }
+
+            var activeAdapters = await GetActiveAdaptersAsync(ct).ConfigureAwait(false);
+            var tasks = activeAdapters.Select(a => GetInstalledSafeAsync(a, ct));
+            var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+            var merged = MergePackages(results.SelectMany(r => r)).ToList();
+            _installedCache = new InstalledCacheEntry(
+                DateTimeOffset.UtcNow,
+                _sourceRegistry.Version,
+                merged);
+            return merged.ToList();
         }
-        catch
+        finally
         {
-            return new List<PackageInfo>();
+            _installedCacheLock.Release();
         }
     }
 
     public async Task<List<PackageInfo>> GetUpdatesAvailableAsync(CancellationToken ct = default)
     {
-        var installed = await GetInstalledPackagesAsync(ct);
+        var installed = await GetInstalledPackagesAsync(ct).ConfigureAwait(false);
         return installed.Where(p => p.HasUpdate).ToList();
+    }
+
+    private async Task<IReadOnlyList<ISourceAdapter>> GetActiveAdaptersAsync(CancellationToken ct)
+    {
+        var candidates = _adapters
+            .Where(adapter => _sourceRegistry.IsEnabled(adapter.SourceId))
+            .ToList();
+        var checks = candidates.Select(async adapter => new
+        {
+            Adapter = adapter,
+            Available = await Task.Run(() => adapter.IsAvailable, ct).ConfigureAwait(false)
+        });
+        return (await Task.WhenAll(checks).ConfigureAwait(false))
+            .Where(result => result.Available)
+            .Select(result => result.Adapter)
+            .ToList();
+    }
+
+    private static async Task<List<PackageInfo>> SearchSafeAsync(
+        ISourceAdapter adapter,
+        string query,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await adapter.SearchAsync(query, ct).ConfigureAwait(false)
+                   ?? new List<PackageInfo>();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException)
+        {
+            return new List<PackageInfo>();
+        }
+        catch (IOException)
+        {
+            return new List<PackageInfo>();
+        }
+        catch (InvalidOperationException)
+        {
+            return new List<PackageInfo>();
+        }
+    }
+
+    private static async Task<List<PackageInfo>> GetInstalledSafeAsync(
+        ISourceAdapter adapter,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await adapter.GetInstalledPackagesAsync(ct).ConfigureAwait(false)
+                   ?? new List<PackageInfo>();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (IOException)
+        {
+            return new List<PackageInfo>();
+        }
+        catch (InvalidOperationException)
+        {
+            return new List<PackageInfo>();
+        }
+        catch (Exception)
+        {
+            // Adapter isolation boundary: return results from healthy providers.
+            return new List<PackageInfo>();
+        }
+    }
+
+    private sealed record SearchCacheEntry(
+        DateTimeOffset CreatedAt,
+        long SourceRegistryVersion,
+        List<PackageInfo> Packages);
+
+    private sealed record InstalledCacheEntry(
+        DateTimeOffset CreatedAt,
+        long SourceRegistryVersion,
+        List<PackageInfo> Packages);
+
+    private static IEnumerable<PackageInfo> MergePackages(IEnumerable<PackageInfo> packages)
+    {
+        foreach (var group in packages
+                     .Where(p => !string.IsNullOrWhiteSpace(p.Id))
+                     .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            var best = group
+                .OrderByDescending(p => p.HasUpdate)
+                .ThenByDescending(p => p.TrustLevel)
+                .First();
+
+            best.AvailableSources = group
+                .SelectMany(p => p.AvailableSources.Append(p.SourceId))
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            best.SourcePackageIds = group
+                .SelectMany(p => p.SourcePackageIds.Count > 0
+                    ? p.SourcePackageIds
+                    : new Dictionary<string, string> { [p.SourceId] = p.Id })
+                .Where(pair => !string.IsNullOrWhiteSpace(pair.Key))
+                .GroupBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Value, StringComparer.OrdinalIgnoreCase);
+
+            best.IsInstalled = group.Any(p => p.IsInstalled);
+            best.IsFavorite = group.Any(p => p.IsFavorite);
+            yield return best;
+        }
     }
 }
